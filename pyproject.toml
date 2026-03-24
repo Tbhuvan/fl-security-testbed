@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fl-security-testbed"
+version = "0.1.0"
+description = "Federated Learning Security Testbed — Byzantine attacks and defenses"
+requires-python = ">=3.11"
+dependencies = [
+    "flwr[simulation]>=1.8.0",
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "opacus>=1.4.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "matplotlib>=3.8.0",
+    "pandas>=2.2.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+fl-run = "fl_testbed.runner:app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
