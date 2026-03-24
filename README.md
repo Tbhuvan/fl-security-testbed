@@ -98,7 +98,7 @@ pytest tests/ -v --cov=. --cov-report=term-missing
 
 ## Research Context
 
-Part of the [ActivGuard](https://github.com/Tbhuvan/activguard) research programme. This testbed provides the experimental platform for RQ5: training vulnerability probes collaboratively across organisations without exposing proprietary code, while defending against poisoning attacks on the shared probe.
+Part of the [ActivGuard](https://github.com/Tbhuvan/activguard) research programme. The open question this testbed targets: can vulnerability detection probes be trained collaboratively across organisations without any participant exposing their proprietary code — and what happens when one participant tries to poison the shared model?
 
 ## License
 
