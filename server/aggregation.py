@@ -182,14 +182,16 @@ def coordinate_median(gradients: GradientList) -> Gradients:
 # ── FLAME ─────────────────────────────────────────────────────────────────────
 
 def flame(gradients: GradientList, epsilon: float = 3000.0) -> Gradients:
-    """FLAME: clustering + noise-based defense against model poisoning.
+    """FLAME: norm-clipping + cosine clustering + DP noise defense against poisoning.
 
-    Uses cosine similarity clustering to filter outliers, then adds
-    calibrated noise. (Nguyen et al., arXiv:2101.02281)
+    Implements the three core steps from Nguyen et al., arXiv:2101.02281:
+      1. Clip each gradient to the median L2 norm (removes scale-based attacks).
+      2. Binary cosine-similarity clustering to isolate the dominant cluster.
+      3. FedAvg the dominant cluster + calibrated Gaussian noise.
 
     Args:
         gradients: Per-client gradients.
-        epsilon:   Noise magnitude bound.
+        epsilon:   DP noise budget — larger epsilon means less noise added.
 
     Returns:
         Filtered and noised aggregate.
@@ -198,40 +200,49 @@ def flame(gradients: GradientList, epsilon: float = 3000.0) -> Gradients:
         raise ValueError("gradients list is empty")
 
     from sklearn.cluster import AgglomerativeClustering
+    from collections import Counter
 
-    # Flatten gradients for clustering
-    flat = np.array([np.concatenate([g.flatten() for g in grads]) for grads in gradients])
-
-    # Normalise to unit vectors for cosine distance
-    norms = np.linalg.norm(flat, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    flat_norm = flat / norms
-
-    # Agglomerative clustering with cosine distance
     n = len(gradients)
-    n_clusters = max(2, n // 2)
+
+    # Step 1: Compute per-client L2 norms on the flattened gradient and clip to
+    # the median norm.  This neutralises scale-based poisoning (e.g. a gradient
+    # that is 500× larger than honest clients) before clustering.
+    flat_raw = np.array([np.concatenate([g.flatten() for g in grads]) for grads in gradients])
+    raw_norms = np.linalg.norm(flat_raw, axis=1)
+    clip_bound = float(np.median(raw_norms))
+
+    def _clip(grads: Gradients, raw_norm: float) -> Gradients:
+        scale = min(1.0, clip_bound / (raw_norm + 1e-9))
+        return [layer * scale for layer in grads]
+
+    clipped = [_clip(grads, float(raw_norms[i])) for i, grads in enumerate(gradients)]
+
+    # Step 2: Cluster clipped (unit-normalised) gradients with binary cosine
+    # agglomerative clustering and keep the dominant cluster.
+    flat_clipped = np.array([np.concatenate([g.flatten() for g in grads]) for grads in clipped])
+    norms_clipped = np.linalg.norm(flat_clipped, axis=1, keepdims=True)
+    norms_clipped = np.where(norms_clipped == 0, 1.0, norms_clipped)
+    flat_norm = flat_clipped / norms_clipped
+
     try:
         clustering = AgglomerativeClustering(
-            n_clusters=n_clusters, metric="cosine", linkage="average"
+            n_clusters=2, metric="cosine", linkage="average"
         )
         labels = clustering.fit_predict(flat_norm)
-        # Keep the largest cluster
-        from collections import Counter
         dominant_label = Counter(labels).most_common(1)[0][0]
-        selected_indices = [i for i, l in enumerate(labels) if l == dominant_label]
+        selected_indices = [i for i, lbl in enumerate(labels) if lbl == dominant_label]
     except Exception as exc:
         log.warning("FLAME clustering failed (%s), falling back to FedAvg", exc)
         selected_indices = list(range(n))
 
     log.debug("FLAME: kept %d/%d clients", len(selected_indices), n)
-    selected = [gradients[i] for i in selected_indices]
+    selected = [clipped[i] for i in selected_indices]
 
-    # Aggregate selected
+    # Step 3: Aggregate selected clipped gradients and add DP Gaussian noise.
+    # noise_std = clip_bound / (epsilon * sqrt(n)) follows the standard DP Gaussian
+    # mechanism: larger epsilon → less noise → less privacy but more utility.
     agg = fedavg(selected)
-
-    # Add calibrated Gaussian noise
-    sensitivity = np.median([np.linalg.norm(flat[i]) for i in selected_indices])
-    noise_std = sensitivity * epsilon / n
+    noise_std = clip_bound / (epsilon * np.sqrt(n))
     noised = [layer + np.random.normal(0, noise_std, layer.shape) for layer in agg]
     return noised
 
